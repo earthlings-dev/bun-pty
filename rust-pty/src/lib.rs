@@ -183,6 +183,7 @@ impl Pty {
             exited: AtomicBool::new(false),
             exit_code: AtomicI32::new(-1),
             pid,
+            pending: Mutex::new(Vec::new()),       // NEW: initialize empty pending buffer
         });
 
         /* wait-thread */
@@ -294,7 +295,7 @@ pub unsafe extern "C" fn bun_pty_spawn(
     let size = PtySize { cols: cols as u16, rows: rows as u16, pixel_width: 0, pixel_height: 0 };
     let cmd = Command::from_cmdline(&cmdline, &cwd, env);
     match Pty::new(cmd, size) {
-        Ok(p)  => store(Arc::new(p)) as c_int,
+        Ok(p)  => store(p) as c_int,
         Err(e) => { debug(&format!("spawn error: {e}")); ERROR },
     }
 }

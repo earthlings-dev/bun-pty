@@ -19,6 +19,7 @@ function resolveLibPath(): string {
 	if (env && existsSync(env)) return env;
 
 	const platform = process.platform;
+	const arch = process.arch;
 
 	// Try both architecture-specific and generic filenames
 	const filenames =
