@@ -12,7 +12,7 @@ use std::{
     io::{Read, Write},
     os::raw::{c_char, c_int},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicI32, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -149,9 +149,10 @@ struct Pty {
     reader: Reader,
     tx_w:   Sender<(Vec<u8>, usize)>,      // (buffer, len)
     _slave: Box<dyn SlavePty + Send>,
-    master: Box<dyn MasterPty + Send>,
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
     exited: AtomicBool,
+    exit_code: AtomicI32,
     pid:    c_int,
     pending: Mutex<Vec<u8>>,               // NEW: stash bytes that didn't fit last time
 }
@@ -160,7 +161,7 @@ unsafe impl Send for Pty {}
 unsafe impl Sync for Pty {}
 
 impl Pty {
-    fn new(cmd: Command, size: PtySize) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    fn new(cmd: Command, size: PtySize) -> Result<Arc<Self>, Box<dyn std::error::Error + Send + Sync>> {
         let sys  = native_pty_system();
         let pair = sys.openpty(size)?;
         let mut child = pair.slave.spawn_command(cmd.to_builder())?;
@@ -171,18 +172,37 @@ impl Pty {
         let (tx_r, rx_r)   = unbounded::<Msg>();
         let (tx_w, rx_w)   = unbounded::<(Vec<u8>, usize)>();
 
+        let master = Arc::new(Mutex::new(pair.master));
+
+        let pty = Arc::new(Self {
+            reader: Reader::new(rx_r),
+            tx_w,
+            _slave: pair.slave,
+            master: master.clone(),
+            killer,
+            exited: AtomicBool::new(false),
+            exit_code: AtomicI32::new(-1),
+            pid,
+        });
+
         /* wait-thread */
         {
             let tx = tx_r.clone();
+            let pty_clone = pty.clone();
             thread::spawn(move || {
-                let _ = child.wait();
+                let status = child.wait();
+                if let Ok(exit_status) = status {
+                    let code = exit_status.exit_code() as i32;
+                    debug(&format!("exit_status.exit_code(): {}", code));
+                    pty_clone.exit_code.store(code, Ordering::Relaxed);
+                }
                 let _ = tx.send(Msg::End);
             });
         }
 
         /* read-thread */
         {
-            let mut rdr = pair.master.try_clone_reader()?;
+            let mut rdr = master.lock().unwrap().try_clone_reader()?;
             let tx = tx_r.clone();
             thread::spawn(move || {
                 let mut buf = vec![0; 8192];
@@ -199,7 +219,7 @@ impl Pty {
 
         /* write-thread  (length-aware) */
         {
-            let mut wtr = pair.master.take_writer()?;
+            let mut wtr = master.lock().unwrap().take_writer()?;
             thread::spawn(move || {
                 while let Ok((data, len)) = rx_w.recv() {
                     if wtr.write_all(&data[..len]).is_err() { break; }
@@ -208,16 +228,7 @@ impl Pty {
             });
         }
 
-        Ok(Self {
-            reader: Reader::new(rx_r),
-            tx_w,
-            _slave: pair.slave,
-            master: pair.master,
-            killer,
-            exited: AtomicBool::new(false),
-            pid,
-            pending: Mutex::new(Vec::new()),       // NEW: initialize empty pending buffer
-        })
+        Ok(pty)
     }
 
     fn read(&self) -> Result<Msg, Box<dyn std::error::Error + Send + Sync>> {
@@ -237,7 +248,7 @@ impl Pty {
 
     fn resize(&self, size: PtySize) -> c_int {
         if self.exited.load(Ordering::Relaxed) { return CHILD_EXITED; }
-        self.master.resize(size).map(|_| SUCCESS).unwrap_or(ERROR)
+        self.master.lock().unwrap().resize(size).map(|_| SUCCESS).unwrap_or(ERROR)
     }
     fn kill(&self) -> c_int {
         let res = self.killer.lock().map(|mut k| k.kill());
@@ -355,6 +366,12 @@ pub extern "C" fn bun_pty_kill(handle: c_int) -> c_int {
 pub extern "C" fn bun_pty_get_pid(handle: c_int) -> c_int {
     if handle <= 0 { return ERROR; }
     with(handle as u32, |p| p.pid)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bun_pty_get_exit_code(handle: c_int) -> c_int {
+    if handle <= 0 { return ERROR; }
+    with(handle as u32, |p| p.exit_code.load(Ordering::Relaxed))
 }
 
 #[unsafe(no_mangle)]

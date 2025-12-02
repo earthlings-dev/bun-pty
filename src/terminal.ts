@@ -19,7 +19,6 @@ function resolveLibPath(): string {
 	if (env && existsSync(env)) return env;
 
 	const platform = process.platform;
-	const arch = process.arch;
 
 	// Try both architecture-specific and generic filenames
 	const filenames =
@@ -89,6 +88,7 @@ try {
 		},
 		bun_pty_kill: { args: [FFIType.i32], returns: FFIType.i32 },
 		bun_pty_get_pid: { args: [FFIType.i32], returns: FFIType.i32 },
+		bun_pty_get_exit_code: { args: [FFIType.i32], returns: FFIType.i32 },
 		bun_pty_close: { args: [FFIType.i32], returns: FFIType.void },
 	});
 } catch (error) {
@@ -197,7 +197,8 @@ export class Terminal implements IPty {
 				this._onData.fire(buf.subarray(0, n).toString("utf8"));
 			} else if (n === -2) {
 				// CHILD_EXITED
-				this._onExit.fire({ exitCode: 0 });
+				const exitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
+				this._onExit.fire({ exitCode });
 				break;
 			} else if (n < 0) {
 				// error
