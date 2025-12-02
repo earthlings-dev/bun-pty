@@ -12,6 +12,20 @@ export const DEFAULT_ROWS = 24;
 export const DEFAULT_FILE = "sh";
 export const DEFAULT_NAME = "xterm";
 
+/**
+ * Quote a string for shell-words compatible splitting on the Rust side.
+ * We are not invoking a shell; quoting is only to preserve token boundaries
+ * when Rust parses the command line with shell_words::split.
+ * 
+ * @param s - The string to quote
+ * @returns The quoted string
+ */
+function shQuote(s: string): string {
+	if (s.length === 0) return "''";
+	// Replace ' with '\'' (close-quote, escaped ', reopen)
+	return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 // terminal.ts  – loader fragment only
 
 function resolveLibPath(): string {
@@ -120,7 +134,8 @@ export class Terminal implements IPty {
 		this._cols = opts.cols ?? DEFAULT_COLS;
 		this._rows = opts.rows ?? DEFAULT_ROWS;
 		const cwd = opts.cwd ?? process.cwd();
-		const cmdline = [file, ...args].join(" ");
+		// Properly quote arguments to preserve spaces and special characters
+		const cmdline = [file, ...args.map(shQuote)].join(" ");
 
 		// Format environment variables as null-terminated string
 		let envStr = "";

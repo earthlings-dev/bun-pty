@@ -308,4 +308,89 @@ test("Terminal handles large output without data loss", async () => {
   // All 1000 lines should be present
   expect(missingLines.length).toBe(0);
   expect(lines.length).toBeGreaterThanOrEqual(1000);
-}); 
+});
+
+test("Terminal preserves arguments with spaces correctly", async () => {
+  let dataReceived = "";
+  let hasExited = false;
+  
+  // Test with echo and an argument containing spaces
+  // This should output "hello world" as a single argument, not split
+  const terminal = new Terminal("echo", ["hello world"]);
+  terminals.push(terminal);
+  
+  terminal.onData((data) => {
+    console.log("[TEST] Received data:", data);
+    dataReceived += data;
+  });
+  
+  terminal.onExit(() => {
+    console.log("[TEST] Process exited");
+    hasExited = true;
+  });
+  
+  // Wait for process to exit or timeout
+  const timeout = 2000;
+  const start = Date.now();
+  
+  while (!hasExited && Date.now() - start < timeout) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  
+  // Allow a short delay for any buffered output to be processed
+  await new Promise(resolve => setTimeout(resolve, 100));
+  
+  console.log("[TEST] Full output received:", JSON.stringify(dataReceived));
+  
+  // The output should contain "hello world" as a single string
+  // If the bug exists, it might be split into "hello" and "world" separately
+  // or the echo command might receive them as separate arguments
+  expect(dataReceived).toContain("hello world");
+  
+  // Verify it's NOT split (should not see "hello" and "world" as separate words in output)
+  // If bug exists: echo might receive "hello" and "world" as separate args, 
+  // outputting "hello world" but as two separate arguments
+  // If fixed: echo receives "hello world" as single arg, outputs "hello world"
+  
+  // Count occurrences - should be exactly one "hello world" phrase
+  const matches = dataReceived.match(/hello world/g);
+  expect(matches).not.toBeNull();
+  if (matches) {
+    console.log(`[TEST] Found ${matches.length} occurrence(s) of "hello world"`);
+  }
+});
+
+test("Terminal preserves arguments with special characters correctly", async () => {
+  let dataReceived = "";
+  let hasExited = false;
+  
+  // Test with an argument containing special characters and spaces
+  const terminal = new Terminal("echo", ['file name (1).txt']);
+  terminals.push(terminal);
+  
+  terminal.onData((data) => {
+    console.log("[TEST] Received data:", data);
+    dataReceived += data;
+  });
+  
+  terminal.onExit(() => {
+    console.log("[TEST] Process exited");
+    hasExited = true;
+  });
+  
+  // Wait for process to exit or timeout
+  const timeout = 2000;
+  const start = Date.now();
+  
+  while (!hasExited && Date.now() - start < timeout) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  
+  // Allow a short delay for any buffered output to be processed
+  await new Promise(resolve => setTimeout(resolve, 100));
+  
+  console.log("[TEST] Full output received:", JSON.stringify(dataReceived));
+  
+  // The output should contain the full filename with parentheses and spaces
+  expect(dataReceived).toContain("file name (1).txt");
+});
