@@ -1,5 +1,3 @@
-import { Buffer } from "node:buffer";
-
 /**
  * Interface for disposable resources.
  */
@@ -106,9 +104,17 @@ export interface IPty {
   readonly process: string;
 
   /**
-   * Set a callback for when data is received from the PTY.
+   * Set a callback for when decoded text data is received from the PTY.
+   * Uses streaming TextDecoder to correctly handle multi-byte UTF-8 sequences
+   * that span chunk boundaries.
    */
   readonly onData: (listener: (data: string) => void) => IDisposable;
+
+  /**
+   * Set a callback for when raw binary data is received from the PTY.
+   * Unlike onData, this provides raw bytes without UTF-8 decoding or buffering.
+   */
+  readonly onBinary: (listener: (data: Uint8Array) => void) => IDisposable;
 
   /**
    * Event emitted when the PTY process exits.
@@ -118,9 +124,9 @@ export interface IPty {
   /**
    * Write data to the PTY.
    *
-   * @param data - The data to write.
+   * @param data - String (will be UTF-8 encoded) or Uint8Array (written directly).
    */
-  write(data: string): void;
+  write(data: string | Uint8Array): void;
 
   /**
    * Resize the PTY.

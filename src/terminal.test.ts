@@ -142,8 +142,8 @@ describe("Terminal configuration and options", () => {
 			expect(data.length).toBeGreaterThan(0);
 			expect(typeof data).toBe("string");
 			// Verify UTF-8 encoding
-			const buffer = Buffer.from(data, "utf8");
-			expect(buffer.length).toBeGreaterThan(0);
+			const encoded = new TextEncoder().encode(data);
+			expect(encoded.byteLength).toBeGreaterThan(0);
 		});
 
 		test("should handle newlines and line endings", () => {
@@ -163,15 +163,15 @@ describe("Terminal configuration and options", () => {
 		test("should handle binary-like data", () => {
 			const data = "\x00\x01\x02\xff";
 			expect(data.length).toBe(4);
-			const buffer = Buffer.from(data, "utf8");
-			expect(buffer.length).toBeGreaterThanOrEqual(4);
+			const encoded = new TextEncoder().encode(data);
+			expect(encoded.byteLength).toBeGreaterThanOrEqual(4);
 		});
 
 		test("should handle very long strings", () => {
 			const data = "a".repeat(10000);
 			expect(data.length).toBe(10000);
-			const buffer = Buffer.from(data, "utf8");
-			expect(buffer.length).toBe(10000);
+			const encoded = new TextEncoder().encode(data);
+			expect(encoded.byteLength).toBe(10000);
 		});
 	});
 

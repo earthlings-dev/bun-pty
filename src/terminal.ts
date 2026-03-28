@@ -1,7 +1,6 @@
 // terminal.ts  —  JS/TS front-end (final fixed version)
 
 import { dlopen, FFIType, ptr } from "bun:ffi";
-import { Buffer } from "node:buffer";
 import { EventEmitter } from "./interfaces";
 import type { IPty, IPtyForkOptions, IExitEvent } from "./interfaces";
 import { join, dirname, basename } from "node:path";
@@ -26,10 +25,12 @@ function shQuote(s: string): string {
 	return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+const encoder = new TextEncoder();
+
 // terminal.ts  – loader fragment only
 
 function resolveLibPath(): string {
-	const env = process.env.BUN_PTY_LIB;
+	const env = process.env['BUN_PTY_LIB'];
 	if (env && existsSync(env)) return env;
 
 	// For bun compile: use statically analyzable require with inline ternary.
@@ -132,7 +133,7 @@ export class Terminal implements IPty {
 	private _pid = -1;
 	private _cols = DEFAULT_COLS;
 	private _rows = DEFAULT_ROWS;
-	private readonly _name = DEFAULT_NAME;
+	private readonly _name: string;
 
 	private _readLoop = false;
 	private _closing = false;
@@ -142,6 +143,7 @@ export class Terminal implements IPty {
 	private readonly _decoder = new TextDecoder("utf-8");
 
 	private readonly _onData = new EventEmitter<string>();
+	private readonly _onBinary = new EventEmitter<Uint8Array>();
 	private readonly _onExit = new EventEmitter<IExitEvent>();
 
 	constructor(
@@ -151,21 +153,23 @@ export class Terminal implements IPty {
 	) {
 		this._cols = opts.cols ?? DEFAULT_COLS;
 		this._rows = opts.rows ?? DEFAULT_ROWS;
+		this._name = opts.name;
 		const cwd = opts.cwd ?? process.cwd();
 		// Properly quote file and arguments to preserve spaces and special characters
 		const cmdline = [shQuote(file), ...args.map(shQuote)].join(" ");
 
-		// Format environment variables as null-terminated string
-		let envStr = "";
-		if (opts.env) {
-			const envPairs = Object.entries(opts.env).map(([k, v]) => `${k}=${v}`);
-			envStr = envPairs.join("\0") + "\0";
+		// Build environment, injecting TERM from the terminal name
+		const envEntries: Record<string, string> = opts.env ? { ...opts.env } : {};
+		if (!('TERM' in envEntries)) {
+			envEntries['TERM'] = this._name;
 		}
+		const envPairs = Object.entries(envEntries).map(([k, v]) => `${k}=${v}`);
+		const envStr = envPairs.length > 0 ? envPairs.join("\0") + "\0" : "";
 
 		this.handle = lib.symbols.bun_pty_spawn(
-			Buffer.from(`${cmdline}\0`, "utf8"),
-			Buffer.from(`${cwd}\0`, "utf8"),
-			Buffer.from(`${envStr}\0`, "utf8"),
+			encoder.encode(`${cmdline}\0`),
+			encoder.encode(`${cwd}\0`),
+			encoder.encode(`${envStr}\0`),
 			this._cols,
 			this._rows,
 		);
@@ -194,16 +198,19 @@ export class Terminal implements IPty {
 	get onData() {
 		return this._onData.event;
 	}
+	get onBinary() {
+		return this._onBinary.event;
+	}
 	get onExit() {
 		return this._onExit.event;
 	}
 
 	/* ------------- IO methods ------------- */
 
-	write(data: string) {
+	write(data: string | Uint8Array) {
 		if (this._closing) return;
-		const buf = Buffer.from(data, "utf8");
-		lib.symbols.bun_pty_write(this.handle, ptr(buf), buf.length);
+		const bytes = typeof data === "string" ? encoder.encode(data) : data;
+		lib.symbols.bun_pty_write(this.handle, ptr(bytes), bytes.length);
 	}
 
 	resize(cols: number, rows: number) {
@@ -227,13 +234,15 @@ export class Terminal implements IPty {
 		if (this._readLoop) return;
 		this._readLoop = true;
 
-		const buf = Buffer.allocUnsafe(4096);
+		const buf = new Uint8Array(4096);
 
 		while (this._readLoop && !this._closing) {
 			const n = lib.symbols.bun_pty_read(this.handle, ptr(buf), buf.length);
 			if (n > 0) {
-				// Use streaming mode to buffer incomplete UTF-8 sequences across chunks
-				// This prevents corruption when multi-byte chars span chunk boundaries
+				// Raw bytes — slice() copies since buf is reused across iterations
+				this._onBinary.fire(buf.slice(0, n));
+
+				// Decoded text — TextDecoder streams incomplete UTF-8 across chunks
 				const decoded = this._decoder.decode(buf.subarray(0, n), { stream: true });
 				if (decoded) {
 					this._onData.fire(decoded);
